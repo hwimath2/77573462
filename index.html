@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>휘매쓰 연산 챌린지!</title>
+
+  <!-- MathJax 불러오기 -->
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" defer></script>
+
+  <style>
+    body {
+      background-color: white;
+      color: black;
+      font-family: sans-serif;
+      margin: 20px;
+    }
+    h1 {
+      text-align: center;
+    }
+    #gameContainer {
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    #difficultySelect {
+      margin: 20px 0;
+    }
+    #energyBar {
+      width: 100%;
+      height: 20px;
+      background-color: #ccc;
+      position: relative;
+      margin-top: 10px;
+      margin-bottom: 20px;
+    }
+    #energyInner {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 100%;
+      background-color: black;
+      transition: width 0.2s linear;
+    }
+    #questionArea {
+      margin: 20px 0;
+    }
+    .choiceBtn {
+      display: block;
+      width: 100%;
+      margin: 5px 0;
+      text-align: left;
+      cursor: pointer;
+      border: 1px solid black;
+      padding: 8px;
+      background-color: white;
+    }
+    #scoreArea, #chanceArea, #globalTimeArea {
+      margin: 10px 0;
+    }
+    #resultMessage {
+      margin: 15px 0;
+      font-weight: bold;
+    }
+    #correctAnswer {
+      margin: 5px 0;
+      color: red;
+    }
+    #restartBtn {
+      margin-top: 20px;
+      padding: 8px;
+      border: 1px solid black;
+      background-color: white;
+      cursor: pointer;
+    }
+    /* 보기 호버 시 */
+    .choiceBtn:hover {
+      background-color: #eee;
+    }
+  </style>
+
+</head>
+<body>
+
+<h1>휘매쓰 연산 챌린지!</h1>
+
+<div id="gameContainer">
+
+  <!-- 난이도 선택 화면 (이름 입력 추가) -->
+  <div id="difficultySelect">
+    <p>이름을 입력하세요:</p>
+    <input type="text" id="userName" placeholder="이름 입력">
+    <p>난이도를 선택하세요.</p>
+    <button onclick="startGame('top')">최상 (20초, 문제당 20점)</button>
+    <button onclick="startGame('high')">상 (30초, 문제당 15점)</button>
+    <button onclick="startGame('mid')">중 (40초, 문제당 13점)</button>
+    <button onclick="startGame('low')">하 (시간제한 없음, 문제당 10점)</button>
+  </div>
+
+  <!-- 실제 퀴즈 화면 -->
+  <div id="quizArea" style="display:none;">
+
+    <div id="globalTimeArea">전체 플레이 시간: <span id="globalTime">0</span>초</div>
+    <div id="chanceArea">남은 기회: <span id="remainingChances">3</span></div>
+    <div id="scoreArea">점수: <span id="score">0</span></div>
+
+    <div id="energyBar">
+      <div id="energyInner"></div>
+    </div>
+
+    <div id="questionArea">
+      <div id="questionText"></div>
+      <div id="choicesContainer"></div>
+    </div>
+
+    <div id="resultMessage"></div>
+    <div id="correctAnswer"></div>
+
+  </div>
+
+  <button id="restartBtn" style="display:none;" onclick="restartGame()">처음으로 돌아가기</button>
+  <!-- 서버 전송 결과 메시지를 보여줄 영역 -->
+  <div id="response"></div>
+</div>
+
+<script>
+  // ------------------ 문제 데이터베이스 ------------------ //
+  const allProblems = [
+    // (문제 데이터는 그대로 유지)
+    {
+      question: "\\(1 - \\{x - 5(1 - 2x)\\} = 15\\)",
+      choices: ["\\(-\\dfrac{9}{7}\\)", "\\(-\\dfrac{1}{11}\\)", "\\(\\dfrac{9}{11}\\)", "\\(-\\dfrac{9}{11}\\)"],
+      answer: 3
+    },
+    // ... 나머지 문제들 ...
+  ];
+
+  // ------------------ 전역 변수 ------------------ //
+  let globalSeconds = 0;
+  let globalTimerId = null;
+  let timeLimitPerQ = 0;
+  let scorePerQ = 0;
+  let infiniteTime = false;
+  let chances = 3;
+  let score = 0;
+  let currentIndex = 0;
+  let questionSet = [];
+  let questionTimerId = null;
+  let energyDecrementInterval = null;
+  let completedOneRound = false;
+  let userName = ""; // 사용자 이름 저장
+
+  // ------------------ 유틸: 배열 섞기 ------------------ //
+  function shuffleArray(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i+1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+  }
+
+  // ------------------ 게임 시작 ------------------ //
+  function startGame(difficulty) {
+    // 첫 화면에서 사용자 이름을 가져옴 (입력 없으면 "익명")
+    userName = document.getElementById("userName").value;
+    if(!userName) {
+      userName = "익명";
+    }
+
+    // 난이도에 따른 시간 제한 및 점수 설정
+    if(difficulty === 'top') {
+      timeLimitPerQ = 20;
+      scorePerQ = 20;
+      infiniteTime = false;
+    } else if(difficulty === 'high') {
+      timeLimitPerQ = 30;
+      scorePerQ = 15;
+      infiniteTime = false;
+    } else if(difficulty === 'mid') {
+      timeLimitPerQ = 40;
+      scorePerQ = 13;
+      infiniteTime = false;
+    } else {
+      timeLimitPerQ = 99999; 
+      scorePerQ = 10;
+      infiniteTime = true;
+    }
+
+    // 초기화
+    globalSeconds = 0;
+    chances = 3;
+    score = 0;
+    currentIndex = 0;
+    completedOneRound = false;
+
+    // 전송 버튼과 응답 메시지 초기화
+    const sendBtn = document.getElementById("sendDataBtn");
+    if(sendBtn) {
+      sendBtn.remove();
+    }
+    document.getElementById("response").innerText = "";
+
+    document.getElementById("restartBtn").style.display = "none";
+    document.getElementById("difficultySelect").style.display = "none";
+    document.getElementById("quizArea").style.display = "block";
+
+    if(globalTimerId) clearInterval(globalTimerId);
+    globalTimerId = setInterval(()=>{
+      globalSeconds++;
+      document.getElementById("globalTime").innerText = globalSeconds;
+    },1000);
+
+    updateUI();
+    loadQuestion();
+  }
+
+  // ------------------ 문제 출력 ------------------ //
+  function loadQuestion() {
+    if(chances <= 0) {
+      endGame();
+      return;
+    }
+
+    if(currentIndex >= questionSet.length) {
+      completedOneRound = true;
+      shuffleArray(questionSet);
+      currentIndex = 0;
+    }
+
+    const qData = questionSet[currentIndex];
+    const correctIndex = qData.answer;
+    let tempChoices = qData.choices.map((c, idx)=>({text: c, originalIndex: idx}));
+    shuffleArray(tempChoices);
+    let newCorrectIdx = tempChoices.findIndex(ch => ch.originalIndex === correctIndex);
+    qData.answer = newCorrectIdx;
+    const newChoicesArr = tempChoices.map(ch => ch.text);
+
+    document.getElementById("questionText").innerHTML = 
+      "다음 일차방정식을 풀어라.<br><br> \\(" + qData.question.replace(/^\\\(|\\\)$/g,"") + "\\)";
+    
+    const choicesContainer = document.getElementById("choicesContainer");
+    choicesContainer.innerHTML = "";
+
+    newChoicesArr.forEach((choiceText, idx)=>{
+      const btn = document.createElement("button");
+      btn.className = "choiceBtn";
+      btn.innerHTML = "\\(" + choiceText.replace(/^\\\(|\\\)$/g,"") + "\\)";
+      btn.onclick = ()=> checkAnswer(idx);
+      choicesContainer.appendChild(btn);
+    });
+
+    document.getElementById("resultMessage").innerText = "";
+    document.getElementById("correctAnswer").innerText = "";
+
+    setTimeout(()=>{MathJax.typeset()}, 50);
+    initEnergyBar();
+  }
+
+  // ------------------ 에너지바 초기화 ------------------ //
+  function initEnergyBar() {
+    clearInterval(questionTimerId);
+    clearInterval(energyDecrementInterval);
+
+    const energyInner = document.getElementById("energyInner");
+    if(infiniteTime) {
+      energyInner.style.width = "100%";
+      return;
+    }
+
+    let totalTime = timeLimitPerQ; 
+    let currentTime = totalTime;
+    energyInner.style.width = "100%";
+
+    energyDecrementInterval = setInterval(()=>{
+      currentTime -= 0.2;
+      let percentage = (currentTime / totalTime)*100;
+      if(percentage < 0) percentage = 0;
+      energyInner.style.width = percentage + "%";
+
+      if(currentTime <= 0) {
+        clearInterval(energyDecrementInterval);
+        chances--;
+        document.getElementById("resultMessage").innerText = "시간이 초과되었습니다! (기회 1 감소)";
+        updateUI();
+        setTimeout(()=>{
+          nextQuestion();
+        }, 1000);
+      }
+    }, 200);
+  }
+
+  // ------------------ 정답 확인 ------------------ //
+  function checkAnswer(selectedIndex) {
+    clearInterval(energyDecrementInterval);
+    const qData = questionSet[currentIndex];
+    const correctIdx = qData.answer;
+
+    if(selectedIndex === correctIdx) {
+      score += scorePerQ;
+      document.getElementById("resultMessage").innerText = "정답입니다! +" + scorePerQ + "점";
+    } else {
+      chances--;
+      document.getElementById("resultMessage").innerText = "틀렸습니다!";
+      const correctText = document.querySelectorAll(".choiceBtn")[correctIdx].innerHTML;
+      document.getElementById("correctAnswer").innerText = "정답 : " + correctText;
+    }
+
+    updateUI();
+    setTimeout(()=>{
+      nextQuestion();
+    }, 1000);
+  }
+
+  function nextQuestion() {
+    currentIndex++;
+    loadQuestion();
+  }
+
+  // ------------------ UI 갱신 ------------------ //
+  function updateUI() {
+    document.getElementById("remainingChances").innerText = chances;
+    document.getElementById("score").innerText = score;
+
+    if(chances <= 0) {
+      endGame();
+    }
+  }
+
+  // ------------------ 게임 종료 및 서버 전송 버튼 추가 ------------------ //
+  function endGame() {
+    clearInterval(globalTimerId);
+    clearInterval(energyDecrementInterval);
+
+    document.getElementById("quizArea").style.display = "none";
+    document.getElementById("restartBtn").style.display = "block";
+    document.getElementById("resultMessage").innerText = "게임 오버! 총 점수: " + score;
+    document.getElementById("correctAnswer").innerText = "";
+
+    // 전송 버튼이 없으면 생성
+    if(!document.getElementById("sendDataBtn")) {
+      const sendBtn = document.createElement("button");
+      sendBtn.id = "sendDataBtn";
+      sendBtn.innerText = "전송하기";
+      sendBtn.onclick = function() {
+        saveData("휘매쓰 연산 챌린지!", userName, score, globalSeconds);
+      };
+      document.getElementById("gameContainer").appendChild(sendBtn);
+    }
+  }
+
+  // ------------------ 서버에 데이터 전송하는 함수 ------------------ //
+  async function saveData(game, name, score, elapsedTime) {
+    const FUNCTION_URL = "https://us-central1-record-f420d.cloudfunctions.net/report";
+    const requestData = {
+      game,
+      name,
+      score: parseInt(score, 10),
+      elapsedTime: parseInt(elapsedTime, 10)
+    };
+
+    try {
+      const response = await fetch(FUNCTION_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestData)
+      });
+      const responseData = await response.json();
+
+      if (response.ok) {
+        document.getElementById('response').innerText = `성공: ${JSON.stringify(responseData, null, 2)}`;
+      } else {
+        document.getElementById('response').innerText = `오류: ${JSON.stringify(responseData, null, 2)}`;
+      }
+    } catch (error) {
+      console.error('요청 실패:', error);
+      document.getElementById('response').innerText = `네트워크 오류: ${error.message}`;
+    }
+  }
+
+  // ------------------ 다시 시작 (초기화) ------------------ //
+  function restartGame() {
+    const sendBtn = document.getElementById("sendDataBtn");
+    if(sendBtn) {
+      sendBtn.remove();
+    }
+    document.getElementById("quizArea").style.display = "none";
+    document.getElementById("difficultySelect").style.display = "block";
+
+    globalSeconds = 0;
+    if(globalTimerId) clearInterval(globalTimerId);
+    if(energyDecrementInterval) clearInterval(energyDecrementInterval);
+
+    document.getElementById("globalTime").innerText = "0";
+    document.getElementById("remainingChances").innerText = "3";
+    document.getElementById("score").innerText = "0";
+    document.getElementById("resultMessage").innerText = "";
+    document.getElementById("correctAnswer").innerText = "";
+    document.getElementById("response").innerText = "";
+  }
+
+  // ------------------ 초기 문제 셋업 ------------------ //
+  // 게임 시작 시 문제집합을 복사하여 섞음
+  questionSet = JSON.parse(JSON.stringify(allProblems));
+  shuffleArray(questionSet);
+</script>
+
+</body>
+</html>
